@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Super Pong with Instant Power-Ups</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(45deg, #1a1a2e, #16213e);
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #e94560;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(233, 69, 96, 0.5);
+            background: #0f3460;
+        }
+        #score {
+            color: white;
+            font-size: 24px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+            margin-bottom: 10px;
+        }
+        #powerupStatus {
+            color: white;
+            font-size: 18px;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+            text-align: center;
+            width: 800px;
+            margin-bottom: 10px;
+        }
+        #powerupButtons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #instantUseBtn {
+            background: #00ff00;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">0 - 0</div>
+    <div id="powerupStatus"></div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="powerupButtons">
+        <button id="powerShotBtn" style="background: #ffd700; color: black;">Power Shot</button>
+        <button id="timeWarpBtn" style="background: #800080; color: white;">Time Warp</button>
+        <button id="gravityWellBtn" style="background: #00ffff; color: black;">Gravity Well</button>
+        <button id="doublePaddleBtn" style="background: #00ff00; color: black;">Double Paddle</button>
+        <button id="magnetizeBtn" style="background: #ff0000; color: white;">Magnetize</button>
+        <button id="chaosOrbBtn" style="background: #9400d3; color: white;">Chaos Orb</button>
+        <button id="instantUseBtn">Instant Use</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score');
+        const powerupStatus = document.getElementById('powerupStatus');
+
+        // Game objects
+        const ball = {
+            x: canvas.width/2,
+            y: canvas.height/2,
+            radius: 10,
+            speedX: 5,
+            speedY: 5,
+            acceleration: 1.02
+        };
+
+        const player = {
+            x: 50,
+            y: canvas.height/2 - 50,
+            width: 15,
+            height: 100,
+            speed: 8,
+            color: '#e94560',
+            score: 0
+        };
+
+        const ai = {
+            x: canvas.width - 65,
+            y: canvas.height/2 - 50,
+            width: 15,
+            height: 100,
+            speed: 6,
+            color: '#00ff9f',
+            score: 0
+        };
+
+        // Power-up definitions (all start available with zero cooldown)
+        const powerUps = {
+            powerShot: { active: false, available: true, timer: 0, cooldown: 0, duration: 5 * 60, cdTime: 30 * 60, color: '#ffd700', text: 'Power Shot' },
+            timeWarp: { active: false, available: true, timer: 0, cooldown: 0, duration: 7 * 60, cdTime: 25 * 60, color: '#800080', text: 'Time Warp' },
+            gravityWell: { active: false, available: true, timer: 0, cooldown: 0, duration: 5 * 60, cdTime: 30 * 60, color: '#00ffff', text: 'Gravity Well' },
+            doublePaddle: { active: false, available: true, timer: 0, cooldown: 0, duration: 8 * 60, cdTime: 35 * 60, color: '#00ff00', text: 'Double Paddle' },
+            magnetize: { active: false, available: true, timer: 0, cooldown: 0, duration: 7 * 60, cdTime: 40 * 60, color: '#ff0000', text: 'Magnetize' },
+            chaosOrb: { active: false, available: true, timer: 0, cooldown: 0, duration: 5 * 60, cdTime: 45 * 60, color: '#9400d3', text: 'Chaos Orb' }
+        };
+
+        // Button setup
+        const buttons = {
+            powerShot: document.getElementById('powerShotBtn'),
+            timeWarp: document.getElementById('timeWarpBtn'),
+            gravityWell: document.getElementById('gravityWellBtn'),
+            doublePaddle: document.getElementById('doublePaddleBtn'),
+            magnetize: document.getElementById('magnetizeBtn'),
+            chaosOrb: document.getElementById('chaosOrbBtn'),
+            instantUse: document.getElementById('instantUseBtn')
+        };
+
+        for (let key in buttons) {
+            if (key !== 'instantUse') {
+                buttons[key].addEventListener('click', () => {
+                    if (powerUps[key].available && powerUps[key].cooldown <= 0 && !powerUps[key].active) {
+                        activatePowerUp(key);
+                    }
+                });
+            }
+        }
+
+        // Instant Use button functionality
+        buttons.instantUse.addEventListener('click', () => {
+            for (let key in powerUps) {
+                if (powerUps[key].available && powerUps[key].cooldown <= 0 && !powerUps[key].active) {
+                    activatePowerUp(key);
+                    powerUps[key].cooldown = 0; // Reset cooldown to zero
+                    break; // Activate only one at a time
+                }
+            }
+        });
+
+        // Game state
+        let keys = {};
+        let goals = [false, false];
+        let magnetized = false;
+        let chaosTimer = 0;
+
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ' && powerUps.powerShot.available && powerUps.powerShot.cooldown <= 0 && !powerUps.powerShot.active) {
+                activatePowerUp('powerShot');
+            }
+        });
+        document.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        function activatePowerUp(type) {
+            powerUps[type].active = true;
+            powerUps[type].available = true; // Keep available for instant use
+            powerUps[type].timer = powerUps[type].duration;
+            powerUps[type].cooldown = 0; // Set cooldown to zero as requested
+            if (type === 'doublePaddle') player.height = 200;
+            console.log(`${type} activated!`);
+        }
+
+        function update() {
+            // Player movement
+            if (keys['ArrowUp'] && player.y > 0) player.y -= player.speed;
+            if (keys['ArrowDown'] && player.y < canvas.height - player.height) player.y += player.speed;
+
+            // AI movement
+            const aiTarget = ball.y - ai.height/2;
+            if (ai.y < aiTarget) ai.y += ai.speed;
+            if (ai.y > aiTarget) ai.y -= ai.speed;
+            ai.y = Math.max(0, Math.min(canvas.height - ai.height, ai.y));
+
+            // Ball movement
+            let ballSpeedX = powerUps.timeWarp.active ? ball.speedX * 0.5 : ball.speedX;
+            let ballSpeedY = powerUps.timeWarp.active ? ball.speedY * 0.5 : ball.speedY;
+
+            if (powerUps.gravityWell.active) {
+                const dx = player.x + player.width/2 - ball.x;
+                const dy = player.y + player.height/2 - ball.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 100) {
+                    ballSpeedX += dx / dist * 2;
+                    ballSpeedY += dy / dist * 2;
+                }
+            }
+
+            if (magnetized) {
+                ball.x = player.x + player.width + ball.radius;
+                ball.y = player.y + player.height/2;
+                if (!powerUps.magnetize.active) {
+                    magnetized = false;
+                    ballSpeedX = -ballSpeedX;
+                }
+            } else {
+                ball.x += ballSpeedX;
+                ball.y += ballSpeedY;
+            }
+
+            if (powerUps.chaosOrb.active && chaosTimer <= 0) {
+                ball.x += (Math.random() - 0.5) * 100;
+                ball.y += (Math.random() - 0.5) * 100;
+                ball.x = Math.max(ball.radius, Math.min(canvas.width - ball.radius, ball.x));
+                ball.y = Math.max(ball.radius, Math.min(canvas.height - ball.radius, ball.y));
+                chaosTimer = 60; // 1 second
+            }
+            if (chaosTimer > 0) chaosTimer--;
+
+            // Ball collision
+            if (ball.y + ball.radius > canvas.height || ball.y - ball.radius < 0) {
+                ball.speedY = -ball.speedY;
+            }
+            if (collides(ball, player)) {
+                ball.speedX = -ball.speedX * ball.acceleration;
+                if (powerUps.powerShot.active) ball.speedX *= 2;
+                ball.x = player.x + player.width + ball.radius;
+                if (powerUps.magnetize.active) magnetized = true;
+            }
+            if (collides(ball, ai)) {
+                ball.speedX = -ball.speedX * ball.acceleration;
+                ball.x = ai.x - ball.radius;
+            }
+
+            // Scoring
+            if (ball.x < 0) {
+                ai.score++;
+                goals[1] = true;
+                resetBall();
+            }
+            if (ball.x > canvas.width) {
+                player.score++;
+                goals[0] = true;
+                resetBall();
+            }
+
+            // Power-up timing
+            for (let key in powerUps) {
+                if (powerUps[key].active) {
+                    powerUps[key].timer--;
+                    if (powerUps[key].timer <= 0) {
+                        powerUps[key].active = false;
+                        if (key === 'doublePaddle') player.height = 100;
+                        if (key === 'powerShot') player.color = '#e94560';
+                    }
+                }
+                if (powerUps[key].cooldown > 0) powerUps[key].cooldown--;
+
+                // Update button states
+                buttons[key].disabled = !powerUps[key].available || powerUps[key].cooldown > 0 || powerUps[key].active;
+            }
+        }
+
+        function collides(ball, paddle) {
+            return ball.x - ball.radius < paddle.x + paddle.width &&
+                   ball.x + ball.radius > paddle.x &&
+                   ball.y - ball.radius < paddle.y + paddle.height &&
+                   ball.y + ball.radius > paddle.y;
+        }
+
+        function resetBall() {
+            ball.x = canvas.width/2;
+            ball.y = canvas.height/2;
+            ball.speedX = 5 * (Math.random() > 0.5 ? 1 : -1);
+            ball.speedY = 5 * (Math.random() * 2 - 1);
+            magnetized = false;
+        }
+
+        function draw() {
+            ctx.fillStyle = 'rgba(15, 52, 96, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Center line
+            ctx.beginPath();
+            ctx.setLineDash([5, 15]);
+            ctx.moveTo(canvas.width/2, 0);
+            ctx.lineTo(canvas.width/2, canvas.height);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Goals
+            ctx.fillStyle = goals[0] ? 'rgba(233, 69, 96, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+            ctx.fillRect(0, 0, 20, canvas.height);
+            ctx.fillStyle = goals[1] ? 'rgba(0, 255, 159, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+            ctx.fillRect(canvas.width - 20, 0, 20, canvas.height);
+            goals = [false, false];
+
+            // Paddles
+            ctx.fillStyle = powerUps.powerShot.active ? powerUps.powerShot.color : player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            if (powerUps.gravityWell.active) {
+                ctx.beginPath();
+                ctx.arc(player.x + player.width/2, player.y + player.height/2, 100, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.3)';
+                ctx.stroke();
+            }
+            ctx.fillStyle = ai.color;
+            ctx.fillRect(ai.x, ai.y, ai.width, ai.height);
+
+            // Ball
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = powerUps.chaosOrb.active ? powerUps.chaosOrb.color : '#ffffff';
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = powerUps.timeWarp.active ? powerUps.timeWarp.color : '#ffffff';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Status text
+            let statusText = '';
+            for (let key in powerUps) {
+                if (powerUps[key].active) {
+                    statusText += `<span style="color: ${powerUps[key].color}">${powerUps[key].text}: ${(powerUps[key].timer/60).toFixed(1)}s</span><br>`;
+                } else if (powerUps[key].cooldown > 0) {
+                    statusText += `<span style="color: ${powerUps[key].color}">${powerUps[key].text}: CD ${(powerUps[key].cooldown/60).toFixed(1)}s</span><br>`;
+                } else if (powerUps[key].available) {
+                    statusText += `<span style="color: ${powerUps[key].color}">${powerUps[key].text}: Ready</span><br>`;
+                } else {
+                    statusText += `<span style="color: ${powerUps[key].color}">${powerUps[key].text}: Unavailable</span><br>`;
+                }
+            }
+            powerupStatus.innerHTML = statusText;
+            scoreDisplay.textContent = `${player.score} - ${ai.score}`;
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
